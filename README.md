@@ -4,6 +4,7 @@ A Laravel 11 web tool that converts public Google Docs into PDF, DOCX, ODT, XLSX
 
 ## Features
 - Google Drive export for PDF, DOCX, and ODT
+- Local file upload (DOCX, PDF, XLSX) stored in Supabase Storage
 - HTML fetch + table parsing to build XLSX
 - Markdown + JSON output
 - Streaming downloads (no temp export files)
@@ -42,11 +43,46 @@ A Laravel 11 web tool that converts public Google Docs into PDF, DOCX, ODT, XLSX
 - HTML export and parsed data are cached for 5 minutes using Laravel cache.
 - Default cache store is file. You can change CACHE_STORE in .env if desired.
 
+## Supabase Storage (Uploads)
+Set these values in .env:
+```
+SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY
+SUPABASE_STORAGE_BUCKET=uploads
+```
+Use a private bucket. Uploaded files expire in cache after 15 minutes and are deleted on the next access after expiry.
+
+## Local Upload Support
+- DOCX: PDF, XLSX, JSON, MD
+- PDF: XLSX, JSON, MD (text-only)
+- XLSX: JSON, MD
+- DOC (legacy) is not supported without external tools
+
 ## Deployment (Shared Hosting)
-- Set the document root to the public folder.
-- Ensure storage and bootstrap/cache are writable.
-- Add APP_URL and APP_KEY in .env.
-- Enable the zip extension to allow XLSX downloads.
+1. Upload project files (or pull from GitHub).
+2. Point the document root to the public folder.
+3. Copy env and set values:
+   ```bash
+   copy .env.example .env
+   ```
+   - APP_URL=https://your-domain.com
+   - APP_ENV=production
+   - APP_DEBUG=false
+4. Generate the app key:
+   ```bash
+   php artisan key:generate
+   ```
+5. Ensure storage and bootstrap/cache are writable.
+6. Place the service account JSON at:
+   ```
+   storage/app/google-auth.json
+   ```
+7. Enable the zip extension to allow XLSX downloads.
+8. Optional (faster):
+   ```bash
+   php artisan config:cache
+   php artisan route:cache
+   ```
 
 ## Security
 - Service account key is excluded from version control via .gitignore.

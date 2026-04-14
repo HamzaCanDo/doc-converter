@@ -83,6 +83,31 @@
             gap: 12px;
         }
 
+        .divider {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: #9aa3ad;
+            font-size: 12px;
+            letter-spacing: 0.2em;
+            text-transform: uppercase;
+            margin: 8px 0 4px;
+        }
+
+        .divider::before,
+        .divider::after {
+            content: "";
+            height: 1px;
+            background: #e4e7ec;
+            flex: 1;
+        }
+
+        .helper {
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
         label {
             font-size: 13px;
             text-transform: uppercase;
@@ -91,7 +116,8 @@
             color: var(--muted);
         }
 
-        input[type="url"] {
+        input[type="url"],
+        input[type="file"] {
             width: 100%;
             padding: 14px 16px;
             border-radius: 12px;
@@ -102,7 +128,8 @@
             transition: border-color 160ms ease, box-shadow 160ms ease;
         }
 
-        input[type="url"]:focus {
+        input[type="url"]:focus,
+        input[type="file"]:focus {
             outline: none;
             border-color: #ff9a7c;
             box-shadow: 0 0 0 3px rgba(255, 122, 89, 0.18);
@@ -185,7 +212,7 @@
         <section class="hero">
             <img class="hero-logo" src="{{ asset('assets/brand/headerlogo.png') }}" alt="Doc Converter logo" />
             <div class="subtitle">
-                Paste a public, view-only Doc link and stream PDF, DOCX, ODT, XLSX, HTML, Markdown, and JSON.
+                Paste a public Doc link or upload DOCX, PDF, or XLSX to stream fast conversions.
             </div>
         </section>
 
@@ -205,7 +232,19 @@
                     />
                 </div>
 
+                <div class="divider">OR</div>
+
+                <div class="input-row">
+                    <label for="file">Upload File (DOCX, PDF, XLSX)</label>
+                    <input id="file" name="file" type="file" accept=".docx,.pdf,.xlsx" />
+                    <div class="helper">Max 40 MB. PDF exports are text-only for free processing.</div>
+                </div>
+
                 @error('url')
+                    <div class="error">{{ $message }}</div>
+                @enderror
+
+                @error('file')
                     <div class="error">{{ $message }}</div>
                 @enderror
 
