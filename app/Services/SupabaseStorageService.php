@@ -62,6 +62,66 @@ class SupabaseStorageService
         ])->delete($this->objectUrl($path));
     }
 
+    public function list(string $prefix = 'uploads/', int $limit = 100, int $offset = 0): array
+    {
+        $this->ensureConfigured();
+
+        $response = Http::withHeaders([
+            'Authorization' => 'Bearer ' . $this->serviceKey,
+            'apikey' => $this->serviceKey,
+            'Content-Type' => 'application/json',
+        ])->post($this->baseUrl . '/storage/v1/object/list/' . $this->bucket, [
+            'prefix' => ltrim($prefix, '/'),
+            'limit' => max(1, $limit),
+            'offset' => max(0, $offset),
+            'sortBy' => [
+                'column' => 'name',
+                'order' => 'asc',
+            ],
+        ]);
+
+        if (!$response->successful()) {
+            throw new RuntimeException('Supabase list failed.');
+        }
+
+        $payload = $response->json();
+
+        if (!is_array($payload)) {
+            return [];
+        }
+
+        if (array_is_list($payload)) {
+            return $payload;
+        }
+
+        if (isset($payload['items']) && is_array($payload['items'])) {
+            return $payload['items'];
+        }
+
+        return [];
+    }
+
+    public function listAll(string $prefix = 'uploads/', int $pageSize = 100): array
+    {
+        $all = [];
+        $offset = 0;
+        $pageSize = max(1, $pageSize);
+
+        do {
+            $batch = $this->list($prefix, $pageSize, $offset);
+            $count = count($batch);
+
+            if ($count === 0) {
+                break;
+            }
+
+            $all = array_merge($all, $batch);
+            $offset += $count;
+        } while ($count === $pageSize);
+
+        return $all;
+    }
+
     private function objectUrl(string $path): string
     {
         return $this->baseUrl . '/storage/v1/object/' . $this->bucket . '/' . ltrim($path, '/');

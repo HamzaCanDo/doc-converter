@@ -29,34 +29,85 @@ class DocConvertController extends Controller
         $data = $request->validate([
             'url' => ['nullable', 'url', 'required_without:file'],
             'file' => ['nullable', 'file', 'required_without:url', 'mimes:docx,pdf,xlsx', 'max:40960'],
+            'upload_format' => ['nullable', 'string', 'in:pdf,xlsx,json,md'],
         ]);
 
         if ($request->hasFile('file')) {
             try {
                 $upload = $this->localConverter->prepareUpload($request->file('file'));
             } catch (RuntimeException $e) {
+                if ($request->expectsJson() || $request->ajax()) {
+                    return response()->json([
+                        'message' => $e->getMessage(),
+                        'errors' => ['file' => [$e->getMessage()]],
+                    ], 422);
+                }
+
                 return back()
                     ->withErrors(['file' => $e->getMessage()])
                     ->withInput();
             }
 
-            $downloads = [];
-            foreach ($upload['formats'] as $format) {
-                $downloads[] = [
-                    'label' => strtoupper($format),
-                    'url' => URL::temporarySignedRoute(
-                        'upload.download',
-                        now()->addMinutes(5),
-                        ['token' => $upload['token'], 'format' => $format]
-                    ),
-                ];
+            $requestedFormat = $request->input('upload_format');
+            $defaultFormat = $upload['formats'][0] ?? null;
+
+            if ($requestedFormat) {
+                if (!in_array($requestedFormat, $upload['formats'], true)) {
+                    if ($request->expectsJson() || $request->ajax()) {
+                        return response()->json([
+                            'message' => 'Selected format is not available for this file type.',
+                            'errors' => ['upload_format' => ['Selected format is not available for this file type.']],
+                        ], 422);
+                    }
+
+                    return back()
+                        ->withErrors(['upload_format' => 'Selected format is not available for this file type.'])
+                        ->withInput();
+                }
+
+                $defaultFormat = $requestedFormat;
             }
 
-            return view('doc-converter', [
-                'downloads' => $downloads,
-                'uploadToken' => $upload['token'],
-                'mode' => 'upload',
-            ]);
+            if ($defaultFormat === null) {
+                if ($request->expectsJson() || $request->ajax()) {
+                    return response()->json([
+                        'message' => 'No export format is available for this file.',
+                        'errors' => ['file' => ['No export format is available for this file.']],
+                    ], 422);
+                }
+
+                return back()
+                    ->withErrors(['file' => 'No export format is available for this file.'])
+                    ->withInput();
+            }
+
+            if ($requestedFormat === null) {
+                if ($request->expectsJson() || $request->ajax()) {
+                    return response()->json([
+                        'message' => 'Please choose an output format.',
+                        'errors' => ['upload_format' => ['Please choose an output format.']],
+                    ], 422);
+                }
+
+                return back()
+                    ->withErrors(['upload_format' => 'Please choose an output format.'])
+                    ->withInput();
+            }
+
+            $downloadUrl = URL::temporarySignedRoute(
+                'upload.download',
+                now()->addMinutes(5),
+                ['token' => $upload['token'], 'format' => $defaultFormat]
+            );
+
+            if ($request->expectsJson() || $request->ajax()) {
+                return response()->json([
+                    'download_url' => $downloadUrl,
+                    'format' => $defaultFormat,
+                ]);
+            }
+
+            return redirect()->to($downloadUrl);
         }
 
         try {

@@ -11,9 +11,11 @@ use League\HTMLToMarkdown\HtmlConverter;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 use PhpOffice\PhpSpreadsheet\IOFactory as SpreadsheetIOFactory;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Writer\Html as SpreadsheetHtmlWriter;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
+use Dompdf\Options;
+use Dompdf\Dompdf;
 use PhpOffice\PhpWord\IOFactory as WordIOFactory;
-use PhpOffice\PhpWord\Settings as WordSettings;
 use RuntimeException;
 use Smalot\PdfParser\Parser as PdfParser;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -33,6 +35,10 @@ class LocalFileConverter
 
         if (!in_array($ext, $supported, true)) {
             throw new RuntimeException('Unsupported file type. Please upload DOCX, PDF, or XLSX.');
+        }
+
+        if ($ext === 'xlsx' && !class_exists('ZipArchive')) {
+            throw new RuntimeException('XLSX uploads require the PHP zip extension. Enable extension=zip and restart the server.');
         }
 
         $token = (string) Str::uuid();
@@ -86,12 +92,14 @@ class LocalFileConverter
             throw new RuntimeException('Unsupported export format for this file type.');
         }
 
-        return match ($meta['type']) {
+        $response = match ($meta['type']) {
             'docx' => $this->streamDocxFormat($meta, $format),
             'pdf' => $this->streamPdfFormat($meta, $format),
             'xlsx' => $this->streamXlsxFormat($meta, $format),
             default => throw new RuntimeException('Unsupported file type.'),
         };
+
+        return $this->wrapStreamWithCleanup($response, $meta);
     }
 
     private function streamDocxFormat(array $meta, string $format): StreamedResponse
@@ -118,10 +126,42 @@ class LocalFileConverter
     private function streamXlsxFormat(array $meta, string $format): StreamedResponse
     {
         return match ($format) {
+            'pdf' => $this->streamXlsxPdf($meta),
             'json' => $this->streamXlsxJson($meta),
             'md' => $this->streamXlsxMarkdown($meta),
             default => throw new RuntimeException('Unsupported export format.'),
         };
+    }
+
+    private function streamXlsxPdf(array $meta): StreamedResponse
+    {
+        return response()->streamDownload(function () use ($meta) {
+            $path = $this->downloadToTemp($meta['path']);
+
+            try {
+                $spreadsheet = SpreadsheetIOFactory::load($path);
+                $writer = new SpreadsheetHtmlWriter($spreadsheet);
+                $writer->setPreCalculateFormulas(false);
+
+                $tmpHtml = tempnam(sys_get_temp_dir(), 'xlsx-html-');
+                if ($tmpHtml === false) {
+                    throw new RuntimeException('Unable to create a temp file.');
+                }
+
+                $writer->save($tmpHtml);
+                $html = file_get_contents($tmpHtml) ?: '';
+                @unlink($tmpHtml);
+
+                echo $this->renderPdfFromHtml($html, 'landscape');
+
+                $spreadsheet->disconnectWorksheets();
+                unset($spreadsheet);
+            } finally {
+                @unlink($path);
+            }
+        }, 'document.pdf', [
+            'Content-Type' => 'application/pdf',
+        ]);
     }
 
     private function streamDocxPdf(array $meta): StreamedResponse
@@ -130,14 +170,8 @@ class LocalFileConverter
             $path = $this->downloadToTemp($meta['path']);
 
             try {
-                WordSettings::setPdfRenderer(
-                    WordSettings::PDF_RENDERER_DOMPDF,
-                    base_path('vendor/dompdf/dompdf')
-                );
-
-                $document = WordIOFactory::load($path);
-                $writer = WordIOFactory::createWriter($document, 'PDF');
-                $writer->save('php://output');
+                $html = $this->getDocxHtml($path);
+                echo $this->renderPdfFromHtml($html, 'portrait');
             } finally {
                 @unlink($path);
             }
@@ -351,6 +385,13 @@ class LocalFileConverter
 
     private function parseDocx(string $path): array
     {
+        $html = $this->getDocxHtml($path);
+
+        return $this->parseHtml($html);
+    }
+
+    private function getDocxHtml(string $path): string
+    {
         $document = WordIOFactory::load($path);
         $writer = WordIOFactory::createWriter($document, 'HTML');
         $tmp = tempnam(sys_get_temp_dir(), 'docx-html-');
@@ -363,7 +404,7 @@ class LocalFileConverter
         $html = file_get_contents($tmp) ?: '';
         @unlink($tmp);
 
-        return $this->parseHtml($html);
+        return $html;
     }
 
     private function parsePdfText(string $path): array
@@ -530,6 +571,59 @@ class LocalFileConverter
         return $tmp;
     }
 
+    private function renderPdfFromHtml(string $html, string $orientation): string
+    {
+        $options = new Options();
+        $options->setIsRemoteEnabled(false);
+        $options->setChroot(public_path());
+
+        $fontDir = public_path('fonts/static');
+        $fontCache = storage_path('framework/cache/dompdf');
+        if (!is_dir($fontCache)) {
+            @mkdir($fontCache, 0755, true);
+        }
+
+        $options->setFontDir($fontDir);
+        $options->setFontCache($fontCache);
+
+        $fontName = $this->getPdfFontName($fontDir);
+        $options->setDefaultFont($fontName);
+
+        $dompdf = new Dompdf($options);
+        $dompdf->loadHtml($this->injectFontCss($html, $fontName));
+        $dompdf->setPaper('A4', $orientation);
+        $dompdf->render();
+
+        return $dompdf->output();
+    }
+
+    private function injectFontCss(string $html, string $fontName): string
+    {
+        $regularPath = 'fonts/static/NotoSansBengali-Regular.ttf';
+        $boldPath = 'fonts/static/NotoSansBengali-Bold.ttf';
+        $css = "<style>body{font-family:'" . $fontName . "',sans-serif;}";
+
+        if ($fontName === 'NotoSansBengali') {
+            $css .= "@font-face{font-family:'NotoSansBengali';src:url('" . $regularPath . "') format('truetype');font-weight:400;font-style:normal;}";
+            $css .= "@font-face{font-family:'NotoSansBengali';src:url('" . $boldPath . "') format('truetype');font-weight:700;font-style:normal;}";
+        }
+
+        $css .= '</style>';
+
+        if (stripos($html, '<head') !== false) {
+            return preg_replace('/<head(.*?)>/', '<head$1>' . $css, $html, 1) ?: $css . $html;
+        }
+
+        return $css . $html;
+    }
+
+    private function getPdfFontName(string $fontDir): string
+    {
+        $regular = $fontDir . DIRECTORY_SEPARATOR . 'NotoSansBengali-Regular.ttf';
+
+        return file_exists($regular) ? 'NotoSansBengali' : 'DejaVu Sans';
+    }
+
     private function getMeta(string $token): array
     {
         $meta = Cache::get($this->metaKey($token));
@@ -550,12 +644,49 @@ class LocalFileConverter
         return $meta;
     }
 
+    private function wrapStreamWithCleanup(StreamedResponse $response, array $meta): StreamedResponse
+    {
+        $original = $response->getCallback();
+
+        $response->setCallback(function () use ($original, $meta): void {
+            $completed = false;
+
+            try {
+                if (is_callable($original)) {
+                    $original();
+                }
+
+                $completed = true;
+            } finally {
+                if ($completed) {
+                    $this->cleanupUploadState($meta['token'], $meta['path']);
+                }
+            }
+        });
+
+        return $response;
+    }
+
+    private function cleanupUploadState(string $token, string $path): void
+    {
+        try {
+            $this->storage->delete($path);
+        } catch (\Throwable) {
+            // Ignore cleanup failures (missing object, transient API failure, etc.).
+        }
+
+        Cache::forget($this->metaKey($token));
+        Cache::forget($this->docxKey($token));
+        Cache::forget($this->pdfKey($token));
+        Cache::forget($this->xlsxKey($token));
+    }
+
     private function formatsForExtension(string $ext): array
     {
         return match ($ext) {
             'docx' => ['pdf', 'xlsx', 'json', 'md'],
             'pdf' => ['xlsx', 'json', 'md'],
-            'xlsx' => ['json', 'md'],
+            'xlsx' => ['pdf', 'json', 'md'],
             default => [],
         };
     }

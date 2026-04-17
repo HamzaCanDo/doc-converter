@@ -10,6 +10,9 @@ A Laravel 11 web tool that converts public Google Docs into PDF, DOCX, ODT, XLSX
 - Streaming downloads (no temp export files)
 - 5-minute signed URLs + per-IP throttling
 - File cache warm-up for faster repeated downloads
+- AJAX upload flow with determinate progress and in-place download button
+- Two-layer Supabase cleanup for uploads (instant + scheduled sweep)
+- Responsive DocFlip UI with externalized CSS/JS assets for faster loads
 
 ## Requirements
 - PHP 8.2+
@@ -50,13 +53,45 @@ SUPABASE_URL=https://YOUR_PROJECT.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY
 SUPABASE_STORAGE_BUCKET=uploads
 ```
-Use a private bucket. Uploaded files expire in cache after 15 minutes and are deleted on the next access after expiry.
+Use a private bucket.
+
+Uploads are cleaned in two layers:
+- Immediate cleanup after successful upload-download streaming
+- Scheduled stale-object sweep for any leftover uploads
+
+Optional env setting:
+```
+UPLOAD_SWEEP_AGE_MINUTES=60
+```
+
+The stale sweep command is:
+```bash
+php artisan uploads:cleanup
+```
+
+Dry run mode:
+```bash
+php artisan uploads:cleanup --dry-run
+```
 
 ## Local Upload Support
 - DOCX: PDF, XLSX, JSON, MD
 - PDF: XLSX, JSON, MD (text-only)
-- XLSX: JSON, MD
+- XLSX: PDF (basic), JSON, MD
 - DOC (legacy) is not supported without external tools
+
+## Upload UX
+- Uploads use AJAX with a determinate progress bar (upload + conversion states)
+- Process button is replaced by Download button when the file is ready
+- File and format validation happen both client-side and server-side
+
+## Frontend Assets and Branding
+- Main page template: `resources/views/doc-converter.blade.php`
+- Externalized frontend assets:
+   - `public/assets/docflip/doc-converter.css`
+   - `public/assets/docflip/doc-converter.js`
+- Branding assets are organized under:
+   - `public/assets/global-logos/`
 
 ## Deployment (Shared Hosting)
 1. Upload project files (or pull from GitHub).
@@ -82,6 +117,11 @@ Use a private bucket. Uploaded files expire in cache after 15 minutes and are de
    ```bash
    php artisan config:cache
    php artisan route:cache
+   ```
+9. Required for scheduled cleanup: configure cron to run Laravel scheduler every minute.
+   Example cron:
+   ```
+   * * * * * php /path/to/project/artisan schedule:run >> /dev/null 2>&1
    ```
 
 ## Security
